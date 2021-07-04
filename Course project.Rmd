@@ -1,0 +1,135 @@
+---
+output:
+  html_document:
+    df_print: paged
+title: "Practical Machine Learning Course Project"
+---
+  
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+setwd('/Users/natashanicholson/Documents/R/ml')
+```
+
+# Executive Summary 
+
+The aim of this project is to predict if a unilateral dumbbell bicep curl is 
+being performed correctly based on the sensor testing data attached to the body 
+and dumbbell. We're given a big dataset of the sensor data which also includes
+a class column describing whether the exercise was being performed correctly at 
+that time (class A) or if it was being performed incorrectly:
+throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), 
+lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).
+Using this data we will fit a range of machine learning algorithms and cross validate
+so we can choose the most accurate model.
+
+
+# Explore data and clean:
+
+Quick look at the training data:  
+  
+```{r, results='hide', message=FALSE, warning=FALSE}
+library(caret)
+library(dplyr)
+library(rattle)
+testing <- read.csv('pml-testing.csv', na.strings=c("","NA"))
+training <- read.csv('pml-training.csv', na.strings=c("","NA"))
+head(training)
+```
+
+From the head it looks like there are a lot of columns that don't need to be included
+when fitting a model so we'll remove mostly NA columns and zero covariates. Also
+change the class column to a factor:
+  
+```{r}
+class <- as.factor(training$classe)
+training <- select(training, -(contains("timestamp")|contains("window")))
+training <- subset(training, select=-c(X, user_name))
+nzv <- nearZeroVar(training)
+training <- training[,-nzv]
+training <- training[, which(colMeans(!is.na(training)) > 0.9)]
+training['classe'] <- class
+```
+
+Split training data into a further training and testing data set for cross validation:
+
+```{r}
+partIndex <- createDataPartition(y=training$classe, p=0.7)[[1]]
+train <- training[partIndex,]
+test <- training[-partIndex,]
+```
+
+# Fit different models:
+
+Firstly we'll fit a tree classification. A tune length of 20 is used to make it more accurate.
+
+```{r}
+tree <- train(classe ~ ., data=train, method='rpart', preProcess=c("center", "scale"), tuneLength=20)
+treePred <- predict(tree, newdata=test)
+treeAcc <- confusionMatrix(treePred, test$classe)$overall
+treeAcc
+```
+
+This shows the tree model has an accuracy of `r as.numeric(treeAcc['Accuracy'])`. Next we'll try a bagging approach:
+
+```{r}
+bag <- train(classe ~ ., data=train, method='treebag', preProcess=c("center", "scale"))
+bagPred <- predict(bag, newdata=test)
+bagAcc <- confusionMatrix(bagPred, test$classe)$overall
+bagAcc
+```
+
+Using 'treebag' as a model gives us an accuracy of `r as.numeric(bagAcc['Accuracy'])` which is already a large improvement over
+the tree model. Next we'll try a random forest model. Tune length set to 3 as fitting this
+model is very slow and metric set to accuracy as getting the most accurate model is the 
+aim of this project.
+
+```{r}
+rf <- train(classe ~ ., data=train, method='rf', tuneLength=3, metric='Accuracy')
+rfPred <- predict(rf, newdata=test)
+rfAcc <- confusionMatrix(rfPred, test$classe)$overall
+rfAcc
+```
+
+This is the most accurate model so far with an accuracy of `r as.numeric(rfAcc['Accuracy'])`. 
+Next we'll fit a gradient boosting model that boosts with trees, "gbm":  
+
+```{r}
+gbm <- train(classe ~ ., data=train, method='gbm', verbose=FALSE)
+gbmPred <- predict(gbm, newdata=test)
+gbmAcc <- confusionMatrix(gbmPred, test$classe)$overall
+gbmAcc
+```
+
+From the summary this model is fairly accurate at `r as.numeric(gbmAcc['Accuracy'])` but beaten by the random
+forest and the bagged models. Lastly we'll fit an LDA model.
+
+```{r}
+lda <- train(classe ~ ., data=train, method='lda')
+ldaPred <- predict(lda, newdata=test)
+ldaAcc <- confusionMatrix(ldaPred, test$classe)$overall
+ldaAcc
+```
+
+The LDA model is the least accurate at `r as.numeric(ldaAcc['Accuracy'])`. Compare all the predictions'
+accuracies and OOS errors:
+  
+```{r}
+acc <- c(treeAcc[1], bagAcc[1], rfAcc[1], gbmAcc[1], ldaAcc[1])
+df <- data.frame(acc)
+colnames(df) <- c('Accuracy')
+df['Out of sample error'] <- 1- df$Accuracy
+rownames(df) <- c('Tree', 'Bagged', 'Random forest', 'GBM', 'LDA')
+df
+```
+
+
+# Conclusion  
+
+From the table we can see that the random forest prediction is the most accurate
+and has the smallest out of sample error, therefore we will use this model to 
+predict the classes from the testing data set:
+
+```{r}
+finalPred <- predict(rf, testing)
+finalPred
+```
